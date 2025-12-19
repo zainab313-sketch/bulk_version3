@@ -132,12 +132,12 @@ def normalize_contacts(contact: str) -> str:
     return contact
 
 # ---------------- WhatsApp ----------------
-def send_message_to_contacts(driver, phone, encoded_message):
-    url = f"https://web.whatsapp.com/send?phone={phone}&app_absent=0"
-    driver.get(url)
-
+def send_message_to_contacts(driver, phone, message):
     try:
-        # Wait for message box
+        url = f"https://web.whatsapp.com/send?phone={phone}"
+        driver.get(url)
+
+        # Wait for chat input box
         chat_box = WebDriverWait(driver, 40).until(
             EC.presence_of_element_located(
                 (By.XPATH, "//div[@contenteditable='true' and @data-tab='10']")
@@ -146,23 +146,112 @@ def send_message_to_contacts(driver, phone, encoded_message):
 
         time.sleep(1)
 
-        # Decode message back to text
-        # message = urllib.parse.unquote(encoded_message)
-
-        # Clear + type message like a human
+        # Type message
         chat_box.click()
-        chat_box.send_keys(encoded_message)
+        lines = message.split("\n")
+
+        for i, line in enumerate(lines):
+            chat_box.send_keys(line)
+            if i != len(lines) - 1:
+                chat_box.send_keys(Keys.SHIFT, Keys.ENTER)
+
+        time.sleep(1)
+        chat_box.send_keys(Keys.ENTER)
+        # chat_box.send_keys(message)
         time.sleep(1)
 
-        # Send message
-        chat_box.send_keys(Keys.ENTER)
+        # Press ENTER to send
+        # chat_box.send_keys(Keys.ENTER)
+
         time.sleep(2)
 
-        return True
+        # Confirm message appeared
+        sent_bubbles = driver.find_elements(
+            By.XPATH, "//div[contains(@class,'message-out')]"
+        )
+        if sent_bubbles:
+            return "Sent"
+
+        return "Failed"
 
     except Exception as e:
-        print(f"[!] Failed to send to {phone}: {e}")
-        return False
+        # Invalid number check (AFTER failure)
+        if "phone number shared via url is invalid" in driver.page_source.lower():
+            return "Invalid"
+        if "is not on whatsapp" in driver.page_source.lower():
+            return "Invalid"
+
+        print(f"[ERROR] {phone}: {e}")
+        return "Failed"
+# def send_message_to_contacts(driver, phone, encoded_message):
+#     url = f"https://web.whatsapp.com/send?phone={phone}"
+#     driver.get(url)
+
+#     try:
+#         # Wait for page load
+#         time.sleep(4)
+
+#         # ❌ CHECK: Invalid number banner
+#         invalid_xpath = (
+#             "//div[contains(text(),'phone number shared via url is invalid') "
+#             "or contains(text(),'is not on WhatsApp')]"
+#         )
+
+#         invalid_elements = driver.find_elements(By.XPATH, invalid_xpath)
+#         if invalid_elements:
+#             print(f"[INVALID] {phone} is not on WhatsApp")
+#             return "Invalid"
+        
+#         # 🔥 FORCE CLICK SEND BUTTON USING JS
+#         send_button = WebDriverWait(driver, 20).until(
+#             EC.element_to_be_clickable(
+#                 (By.XPATH, "//button[@aria-label='Send']")
+#             )
+#         )
+#         driver.execute_script("""
+#             const buttons = document.querySelectorAll("button");
+#             for (let btn of buttons) {
+#                 if (btn.querySelector("span[data-icon='send']")) {
+#                     btn.click();
+#                     return;
+#                 }
+#             }
+#         """)
+#         send_button.click()
+
+#         time.sleep(2)
+
+#         # ✅ FINAL VERIFICATION: message appeared in chat
+#         sent_bubbles = driver.find_elements(
+#             By.XPATH,
+#             "//div[contains(@class,'message-out' )]"
+#         )
+#         if sent_bubbles:
+#             return "Sent"
+
+#     # try:
+#         # Wait for message box
+#         chat_box = WebDriverWait(driver, 40).until(
+#             EC.presence_of_element_located(
+#                 (By.XPATH, "//div[@contenteditable='true' and @data-tab='10']")
+#             )
+#         )
+
+#         time.sleep(1)
+
+#         # Decode message back to text
+#         msg = " ".join(msg.split())  # remove extra spaces
+#         # encoded_message = urllib.parse.unquote(encoded_message)
+
+#         # Clear + type message like a human
+#         chat_box.click()
+#         chat_box.send_keys(encoded_message)
+#         time.sleep(2)
+#         return True
+
+#     except Exception as e:
+#         print(f"[!] Failed to send to {phone}: {e}")
+#         return False
 
 
 # ---------------- GUI ----------------
@@ -371,6 +460,12 @@ class WhatsAppModernApp(ctk.CTk):
         except:
             self.log("❌ Could not read Excel file.")
             return
+        
+        if "WhatsApp Status" not in df.columns:
+            df["WhatsApp Status"] = ""
+
+        else:
+          df["WhatsApp Status"] = df["WhatsApp Status"].astype(str)
 
         contacts_col = self.find_column(df, ["contacts", "contact", "phone", "number", "mobile", "whatsapp"])
         if not contacts_col:
@@ -392,10 +487,6 @@ class WhatsAppModernApp(ctk.CTk):
 
         print("📋 Numbers after cleaning:")
         print(df[contacts_col].tolist())
-
-        
-        if "WhatsApp Status" not in df.columns:
-            df["WhatsApp Status"] = ""
 
         # Add contacts to DB
         for _, row in df.iterrows():
@@ -440,27 +531,44 @@ class WhatsAppModernApp(ctk.CTk):
             if result and result[0] == "Sent":
                 self.log(f"⚠ Skipping {phone} — already sent.")
                 continue
+            msg = message_template
             try:
                 msg = message_template.format(name=name)
             except:
                 msg = message_template
             # encoded_msg = msg 
-            encoded_msg = urllib.parse.quote(msg)
+            # encoded_msg = urllib.parse.quote(msg)
+            # msg = " ".join(msg.split())
             self.log(f"➡ Sending to {phone} ({idx+1}/{len(df)})…")
-            success = send_message_to_contacts(driver, phone, encoded_msg)
-            if success:
+
+            result = send_message_to_contacts(driver, phone, msg)
+            if result == "Sent":
                 update_status(phone, "Sent")
-                df.loc[idx, "WhatsApp Status"] = ""  # leave blank for valid
+                df.loc[idx, "WhatsApp Status"] = "Sent"
+
+            elif result == "Invalid":
+                update_status(phone, "Invalid")
+                df.loc[idx, "WhatsApp Status"] = "Invalid"
+
             else:
                 update_status(phone, "Failed")
-                df.loc[idx, "WhatsApp Status"] = "Invalid"  # mark invalid
+                df.loc[idx, "WhatsApp Status"] = "Failed"
+
+
+            # success = send_message_to_contacts(driver, phone, msg)
+            # if success:
+            #     update_status(phone, "Sent")
+            #     df.loc[idx, "WhatsApp Status"] = ""  # leave blank for valid
+            # else:
+            #     update_status(phone, "Failed")
+            #     df.loc[idx, "WhatsApp Status"] = "Invalid"  # mark invalid
 
             # Save Excel after each row (optional, safe)
             if idx % 10 == 0:
                 df.to_excel(self.excel_path, index=False)
-
-            df.to_excel(self.excel_path, index=False)
+            # df.to_excel(self.excel_path, index=False)
             time.sleep(4)
+        df.to_excel(self.excel_path, index=False)
         self.log("🎉 All messages processed! Closing browser in 5 seconds…")
         time.sleep(5)
         driver.quit()
